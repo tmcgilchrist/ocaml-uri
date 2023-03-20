@@ -59,9 +59,9 @@ let uri_encodes = [
   "/wh/at/ev/er", (Uri.make ~path:"/wh/at/ev/er" ());
   "/wh/at!/ev%20/er", (Uri.make ~path:"/wh/at!/ev /er" ());
   (* IPv6 literal *)
-  "http://%5Bdead%3Abeef%3A%3Adead%3A0%3Abeaf%5D",
+  "http://[dead:beef::dead:0:beaf]",
     (Uri.make ~scheme:"http" ~host:"[dead:beef::dead:0:beaf]" ());
-  "http://user:pass@%5B2001%3A41d1%3Afe67%3A500%3A227%3Ac6ff%3Afe5a%3Aefa0%5D:6789/wh/at/ever?foo=1&bar=5#5",
+  "http://user:pass@[2001:41d1:fe67:500:227:c6ff:fe5a:efa0]:6789/wh/at/ever?foo=1&bar=5#5",
   (Uri.make ~scheme:"http" ~userinfo:"user:pass" ~host:"[2001:41d1:fe67:500:227:c6ff:fe5a:efa0]"
      ~port:6789 ~path:"/wh/at/ever" ~query:["foo",["1"];"bar",["5"]] ~fragment:"5" ());
   (* IPv6 literal with zone id *)
@@ -99,7 +99,13 @@ let test_uri_encode =
     let name = sprintf "uri:%s" uri_str in
     let test () = assert_equal ~printer:(fun x -> x) uri_str (Uri.to_string uri) in
     name >:: test
-  ) uri_encodes
+   ) uri_encodes
+
+let test_uri_custom_encode =
+  let str = "https://google.com?test=@" in
+  let uri = Uri.of_string str in
+  let pct_encoder = Uri.pct_encoder ~query_value:(`Custom (`Query_value, "", "@")) () in
+  assert_equal ~printer:(fun x -> x) "https://google.com?test=%40" (Uri.to_string ~pct_encoder uri)
 
 (* Test that a URI decodes to the expected value *)
 let test_uri_decode =
@@ -332,6 +338,7 @@ let generic_uri_norm = [
   "//colon%3Auser@example.net/",
   "//colon%3Auser@example.net/";
   "foo+bar%3a", "./foo+bar:";
+  "http://[2001:DB8:1234:5678:90ab:cdef::0123]/%68%65%6c%6c%6f", "http://[2001:db8:1234:5678:90ab:cdef::0123]/hello";
   (let p_q = "/foo%20bar/" in
    p_q, Uri.(path_and_query (of_string p_q)));
 ]
@@ -640,7 +647,10 @@ let with_uri =
    Uri.with_uri ~query:None base,                  "scheme://user:pass@host:0/path#fragment";
    Uri.with_uri ~query:(Some ["new", ["a"]]) base, "scheme://user:pass@host:0/path?new=a#fragment";
    Uri.with_uri ~fragment:None base,               "scheme://user:pass@host:0/path?query=arg";
-   Uri.with_uri ~fragment:(Some "new") base,       "scheme://user:pass@host:0/path?query=arg#new"]
+   Uri.with_uri ~fragment:(Some "new") base,       "scheme://user:pass@host:0/path?query=arg#new";
+   Uri.with_uri ~host:(Some "2001:DB8:1234:5678:90ab:cdef::0123") base,
+     "scheme://user:pass@[2001:DB8:1234:5678:90ab:cdef::0123]:0/path?query=arg#fragment"
+   ]
 
 let test_with_uri =
   List.map (fun (input, output) ->
@@ -648,6 +658,40 @@ let test_with_uri =
           assert_equal ~printer:(fun l -> l) output input
     )
   ) (List.map (fun (i, o) -> Uri.to_string i, o) with_uri)
+
+let ipv6_addresses =
+  ["::", "::"
+  ; "::1", "::1"
+  ;"fe02::1","fe02::1"
+  ;"::ffff:192.0.2.1", "::ffff:192.0.2.1"
+  ;"2001:DB8::42","2001:DB8::42"
+  ;"2001:DB8:1234:5678:90ab:cdef:0123:4567","2001:DB8:1234:5678:90ab:cdef:0123:4567"
+  ;"2001:DB8:1234:5678:90ab:cdef:0123::","2001:DB8:1234:5678:90ab:cdef:0123::"
+  ;"2001:DB8:1234:5678:90ab:cdef::0123","2001:DB8:1234:5678:90ab:cdef::0123"
+  ;"2001:DB8:1234:5678:90ab:cdef:192.0.2.1","2001:DB8:1234:5678:90ab:cdef:192.0.2.1"
+  ;"2001:DB8:1234:5678:90ab:cdef:192.0.2.1","2001:DB8:1234:5678:90ab:cdef:192.0.2.1"
+  ]
+
+let test_ipv6_parsing =
+  List.map (fun (input, expected) ->
+    let name = sprintf "ipv6:%s" input in
+    let test () =
+      match Angstrom.parse_string ~consume:All Uri.Parser.ipv6 input with
+      | Ok parsed ->
+        assert_equal ~printer:(fun x -> x) expected parsed
+      | Error msg -> assert_failure msg
+    in
+    name >:: test
+  ) ipv6_addresses
+
+let compat_uris =
+  [ "http://\nhost"
+  ; "http://host\n/path"
+  ; "http://host/path\n?query=1"
+  ; "http://host/path?query=1&other\n=2"
+  ; "http://user\n:password@host/path"
+  ; "http://user:password@\nhost/path"
+  ]
 
 (* Returns true if the result list contains successes only.
    Copied from oUnit source as it isnt exposed by the mli *)
@@ -682,6 +726,7 @@ let _ =
     @ test_with_change
     @ test_canonicalize
     @ test_with_uri
+    @ test_ipv6_parsing
   ) in
   let verbose = ref false in
   let set_verbose _ = verbose := true in

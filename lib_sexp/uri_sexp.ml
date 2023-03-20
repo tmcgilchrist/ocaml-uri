@@ -15,6 +15,8 @@ struct
 	  | `Query_key
 	  | `Query_value
 	  | `Fragment
+          | `Generic
+          | `Custom of (component * string * string)
 	] [@@deriving sexp]
 
 	type t = {
